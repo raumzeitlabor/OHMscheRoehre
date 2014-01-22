@@ -1,5 +1,5 @@
 #include <SoftwareSerial.h>
-
+#include <util/parity.h> 
 #include <avr/wdt.h>
 #include <EtherCard.h>
 #include <IPAddress.h>
@@ -8,14 +8,15 @@
 
 CController g_controller;
 
-#define SERIALINPIN 4
-
-SoftwareSerial mySerial(SERIALINPIN, 10); // 10 is not used
+#define MAX_BUF 2
+long buffer[MAX_BUF];
+uint8_t bufPos;
 
 void setup()
 {
   SetupWatchdog();
   SetupDebug();
+  bufPos=0;
   DBGPRINT("board started\n");
 
   g_controller.Initialize();
@@ -25,9 +26,8 @@ void setup()
   //of all art-net controllers on the network
   ether.udpServerListenOnPort(&UdpArtNet, ARTNETPORT - 1);
   
-  pinMode(SERIALINPIN, INPUT);
-  mySerial.begin(9600);
-//  mySerial.setTimeout(200);
+  Serial.begin(38400, SERIAL_8E1);
+  Serial.setTimeout(20);
   
   g_controller.m_preset = 0;
   
@@ -36,7 +36,7 @@ void setup()
 
 void loop()
 {
-//  ether.packetLoop(ether.packetReceive());
+  ether.packetLoop(ether.packetReceive());
   parseSerial();
   g_controller.Process();
 }
@@ -51,12 +51,35 @@ static int uart_putchar (char c, FILE *stream)
 #endif
 
 void parseSerial () {
-  uint8_t j;
+  long j, brightness;
+  uint8_t valid;
   
-  j = mySerial.parseInt();
-  
+  j = Serial.parseInt();
+          
   if (j != 0) {
-      g_controller.m_preset = j - 1;
+      j = j - 1;
+      
+      buffer[bufPos] = j;
+      bufPos++;
+      
+      if (bufPos == MAX_BUF) {
+        bufPos = 0;
+      }
+      
+      valid = true;
+      for (j=1;j<MAX_BUF;j++) {
+        if (buffer[j] != buffer[0]) {
+           valid = false; 
+        }
+      }
+        
+      if (valid) {
+      brightness = buffer[0] >> 12;
+
+      g_controller.m_brightness = brightness;
+      g_controller.m_preset = buffer[0] & 0xFF;
+      }
+
     }
 }
 void SetupWatchdog()
@@ -108,7 +131,9 @@ void UdpArtNet(word port, byte ip[4], const char* data, word len)
   DBGPRINTAUX("\n");
 #endif
 
-  g_controller.HandlePacket(ip, port, (uint8_t*)data, len);
+  if (!g_controller.manualOverride()) {
+    g_controller.HandlePacket(ip, port, (uint8_t*)data, len);
+  }
 }
 
 void Transmit(uint8_t* data, uint16_t size, uint16_t sourceport, const uint8_t* destip, uint16_t destport)

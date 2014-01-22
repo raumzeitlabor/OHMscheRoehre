@@ -1,7 +1,7 @@
 #ifndef CONTROLLER_H
 #define CONTROLLER_H
 
-#define STATIC 1
+#define STATIC 0
 
 #include <FastSPI_LED2.h>
 #include "artnet.h"
@@ -22,7 +22,8 @@ class CController
     uint8_t manualOverride();
     void    doManualOverride();
 
-    uint8_t m_preset;
+    uint8_t  m_brightness;
+    uint16_t m_preset;
     
   private:
     void    SetPortAddressFromIp();

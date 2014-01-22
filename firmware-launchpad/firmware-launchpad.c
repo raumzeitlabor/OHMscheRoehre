@@ -27,6 +27,8 @@
 #include "inc/hw_memmap.h"
 #include "inc/hw_types.h"
 #include "driverlib/debug.h"
+#include "driverlib/adc.h"
+
 #include "driverlib/fpu.h"
 #include "driverlib/gpio.h"
 #include "driverlib/interrupt.h"
@@ -53,7 +55,8 @@ static unsigned char selector1;
 static unsigned char selector2;
 static unsigned char button1;
 static unsigned char button2;
-static unsigned char value;
+static unsigned long value;
+static unsigned long brightness;
 
 void
 UARTSend(const unsigned char *pucBuffer, unsigned long ulCount)
@@ -66,12 +69,13 @@ UARTSend(const unsigned char *pucBuffer, unsigned long ulCount)
         //
         // Write the next character to the UART.
         //
-        UARTCharPut(UART5_BASE, *pucBuffer++);
+        UARTCharPutNonBlocking(UART5_BASE, *pucBuffer++);
     }
 }
 
 main(void)
 {
+	unsigned long ulADC1_Value[1];
     volatile unsigned long ulLoop;
     char buf[32];
 
@@ -81,15 +85,23 @@ main(void)
     SysCtlPeripheralEnable(SYSCTL_PERIPH_UART5);
     SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOE);
 
-    ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOB);
-    ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOF);
-    ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOD);
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOB);
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOF);
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOD);
 
     GPIOPinConfigure(GPIO_PE5_U5TX);
     GPIOPinTypeUART(GPIO_PORTE_BASE, GPIO_PIN_5);
 
-    UARTConfigSetExpClk(UART5_BASE, ROM_SysCtlClockGet(), 9200,  (UART_CONFIG_WLEN_8 | UART_CONFIG_STOP_ONE |
-                             UART_CONFIG_PAR_NONE));
+    UARTConfigSetExpClk(UART5_BASE, ROM_SysCtlClockGet(), 38400,  (UART_CONFIG_WLEN_8 | UART_CONFIG_STOP_ONE |
+                             UART_CONFIG_PAR_EVEN));
+SysCtlPeripheralEnable(SYSCTL_PERIPH_ADC0);
+GPIOPinTypeADC(GPIO_PORTE_BASE, GPIO_PIN_2);
+ADCSequenceConfigure(ADC0_BASE, 3, ADC_TRIGGER_PROCESSOR, 0);
+ADCSequenceStepConfigure(ADC0_BASE, 3, 0, ADC_CTL_CH1 | ADC_CTL_IE |
+                             ADC_CTL_END);
+ADCSequenceEnable(ADC0_BASE, 3);
+ADCIntClear(ADC0_BASE, 3);
+
 
 
     ROM_GPIODirModeSet(GPIO_PORTB_BASE, GPIO_PIN_2, GPIO_DIR_MODE_IN);
@@ -128,12 +140,15 @@ main(void)
 
 	ROM_GPIOPadConfigSet(GPIO_PORTE_BASE, GPIO_PIN_1,
 							 GPIO_STRENGTH_2MA, GPIO_PIN_TYPE_STD_WPU);
+ADCProcessorTrigger(ADC0_BASE, 3);
 
     //
     // Loop forever.
     //
     while(1)
     {
+
+
         //
         // Turn on the LED.
         //
@@ -142,7 +157,7 @@ main(void)
         //
         // Delay for a bit.
         //
-        for(ulLoop = 0; ulLoop < 20000; ulLoop++)
+        for(ulLoop = 0; ulLoop < 200000; ulLoop++)
         {
         }
 
@@ -200,11 +215,18 @@ main(void)
         	selector1 = 3; // HF
         }
 
-        value = (selector1 | (selector2 << 2) | (button1 << 5) | (button2 << 6)) + 1;
+
+	if (ADCIntStatus(ADC0_BASE, 3, false)) {
+		ADCIntClear(ADC0_BASE, 3);
+		ADCSequenceDataGet(ADC0_BASE, 3, ulADC1_Value);
+		ADCProcessorTrigger(ADC0_BASE, 3);
+
+		brightness = (ulADC1_Value[0] / 32);
+	}
+
+	value = (selector1 | (selector2 << 2) | (button1 << 5) | (button2 << 6) | (brightness << 12))+1;
 
 	usprintf(buf, "%dX\n\r", value);
-
 	UARTSend(buf, 32);
-//	UARTCharPut(UART5_BASE, value);	
     }
 }

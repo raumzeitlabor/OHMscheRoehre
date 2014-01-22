@@ -4,7 +4,7 @@
 #include "controller.h"
 #include "debugprint.h"
 
-byte Ethernet::buffer[100];
+byte Ethernet::buffer[600];
 
 #if STATIC
 static byte myip[] = { 192,168,1,200 };
@@ -12,6 +12,7 @@ static byte gwip[] = { 192,168,1,1 };
 #endif
 
 #define MANUAL_OVERRIDE 32
+#define MODE_FAST 64
 #define COLORMASK 3
 #define MODEMASK 28
 #define MODE_STATIC 0
@@ -19,14 +20,19 @@ static byte gwip[] = { 192,168,1,1 };
 #define MODE_FADE 2
 #define MODE_BAR_V 3
 #define MODE_BAR_H 4
+
+#define LEDSPERTURN 7
+
+uint8_t animationState;
+uint8_t animationState2;
+
 extern void Transmit(uint8_t* data, uint16_t size, uint16_t sourceport, const uint8_t* destip, uint16_t destport);
 
 CController::CController() : m_artnet(*this, Ethernet::buffer + UDP_DATA_P, ether.myip, ether.mymac)
 {
 }
 
-#define DATAPIN 1
-#define CLOCKPIN 4
+#define DATAPIN 4
 #define SELECTPIN 6
 #define ETHERRESETPIN 9
 
@@ -38,21 +44,12 @@ void CController::Initialize()
   //let the pin rise if the jumper is open
   delay(10);
 
-  //add led chip based on jumper position
-  if (digitalRead(SELECTPIN))
-  {
     LEDS.addLeds<WS2812B, DATAPIN, GRB>(m_leds, NUM_LEDS); //led strip
     memset(m_leds, 0x10, sizeof(m_leds)); //led strip can't handle full white
-  }
-  else
-  {
-    LEDS.addLeds<WS2801, DATAPIN, CLOCKPIN, BRG>(m_leds, NUM_LEDS); //led pixel
-    memset(m_leds, 0xFF, sizeof(m_leds));
-  }
 
   //make all leds white
   LEDS.show();
-return;
+
   //init the led timestamp
   m_ledshowtime = millis();
 
@@ -152,14 +149,17 @@ void CController::SetPortAddressFromIp()
 }
 
 uint8_t CController::manualOverride () {
-   if (m_preset & MANUAL_OVERRIDE == MANUAL_OVERRIDE) {
+   if ((m_preset & MANUAL_OVERRIDE) == MANUAL_OVERRIDE) {
      return true;
+   } else {
+     return false;
    }
 }
 
 void CController::doManualOverride () {
-  uint8_t mode, j,t;
-  uint32_t color;
+  uint32_t mode;
+  uint8_t j,t;
+  CRGB color;
   
   switch (m_preset & COLORMASK) {
      case 0: color = CRGB::Blue; break;
@@ -168,11 +168,19 @@ void CController::doManualOverride () {
      case 3: color = CRGB::Green; break;
   }
   
+  Serial.print(m_brightness);
+  Serial.print(" ");
+  color.r = (float)((float)m_brightness/128) * (float)color.r;
+  color.g = (float)((float)m_brightness/128) * (float)color.g;
+  color.b = (float)((float)m_brightness/128) * (float)color.b;
+  
+  Serial.println(color.r);
   mode = (m_preset & MODEMASK) >> 2;
+  
+//  Serial.println(mode);
   
   switch (mode) {
      case MODE_STATIC:
-     break;
       for (j=0;j<NUM_LEDS;j++) {
         m_leds[j] = color;
       }
@@ -203,46 +211,79 @@ void CController::doManualOverride () {
        }
        }
        break;
-         
+     case MODE_FADE:
+       animationState++;
+       if (animationState > NUM_LEDS) {
+        animationState = 0; 
+        animationState2 = !animationState2;
+       }
+
+      if (animationState2) {
+       for (j=0;j<NUM_LEDS-animationState;j++) {
+         m_leds[j] = color;
+       } 
+      } else {
+        for (j=(NUM_LEDS-animationState);j<NUM_LEDS;j++) {
+         m_leds[j] = color;
+       }
+       
+      }
+     break;
+     case MODE_BAR_V:
+       animationState++;
+       
+       if (animationState > (NUM_LEDS/LEDSPERTURN)) {
+          animationState = 0; 
+       }
+       
+         for (j=0;j<LEDSPERTURN;j++) {
+            m_leds[j+((21-animationState)*LEDSPERTURN)] = color;                  
+         }
+     break;
+     case MODE_BAR_H:
+       animationState++;
+       
+       if (animationState > LEDSPERTURN-1) {
+          animationState = 0; 
+       }
+       
+       for (j=animationState;j<NUM_LEDS;j+=LEDSPERTURN) {
+        m_leds[j] = color; 
+       }
+     break;
   }
-  for (j=0;j<mode;j++) {
-    m_leds[j] = CRGB::White;
-  }
-  
+ 
   LEDS.show();
   wdt_reset();
-  delay(10);
+  
+  if ((m_preset & MODE_FAST) == MODE_FAST) {
+    delay(1);
+  } else {
+    delay(50); 
+  }
 }
 
 void CController::Process()
 {
-  memset(m_leds, 0x10, sizeof(m_leds));
-  
-  if (m_preset == 32) {
-    m_leds[random(NUM_LEDS-1)] = CRGB::White;
-     LEDS.show();
-  wdt_reset();
-//    doManualOverride();
+  if (manualOverride()) {
+      memset(m_leds, 0x00, sizeof(m_leds));
+     doManualOverride();
     return;
   }
   
-  return;
-  int j;
-
-  
-  for (j=0;j<100;j++) {
-    m_leds[j].r = 0x50;
-    m_leds[j].g = 0;
-    m_leds[j].b = 0;
+  if (EtherCard::dhcp_renewed)
+  {
+    //possibly new ip address, reset port address
+    SetPortAddressFromIp();
+    m_artnet.Initialize();
+    EtherCard::dhcp_renewed = false;
   }
-  LEDS.show();
-  wdt_reset();
-  return;
+  
   uint32_t now = millis();
 
   //if valid art-net data has been received in the last minute,
   //reset the watchdog timer
-  if (now - m_validdatatime < 60000)
+//  if (now - m_validdatatime < 60000)
     wdt_reset();
 
   m_artnet.Process(now);
@@ -254,13 +295,7 @@ void CController::Process()
     m_ledshowtime = now;
   }
 
-  if (EtherCard::dhcp_renewed)
-  {
-    //possibly new ip address, reset port address
-    SetPortAddressFromIp();
-    m_artnet.Initialize();
-    EtherCard::dhcp_renewed = false;
-  }
+  
 }
 
 void CController::HandlePacket(byte ip[4], uint16_t port, uint8_t* data, uint16_t len)
